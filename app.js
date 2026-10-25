@@ -1,6 +1,7 @@
 "use strict";
 
 const KEY = "fence-counter-v1"; // Keep the existing storage key for backwards compatibility.
+const SIDE_NAMES = ["Jacek / Piotrek", "Tomek / Jacek", "Jacek / Bożena"];
 const ELEMENTS = [
   ["panels", "Panele (siatka)", "szt."],
   ["bases", "Podwaliny betonowe", "szt."],
@@ -65,11 +66,11 @@ function snapshot() {
 function render() {
   const current = state.sides[state.selected];
   $("tabs").innerHTML = state.sides.map((_, i) =>
-    `<button class="tab ${i === state.selected ? "active" : ""}" data-side="${i}" aria-pressed="${i === state.selected}">Strona ${i + 1}</button>`
+    `<button class="tab ${i === state.selected ? "active" : ""}" data-side="${i}" aria-pressed="${i === state.selected}">${SIDE_NAMES[i]}</button>`
   ).join("");
 
   const count = ELEMENTS.reduce((sum, [key]) => sum + quantity(current, key), 0);
-  $("summary").innerHTML = `<span>Strona ${state.selected + 1} • ${count} elementów łącznie</span><strong>${currency(sideCents(current))}</strong>`;
+  $("summary").innerHTML = `<span>${SIDE_NAMES[state.selected]} • ${count} elementów łącznie</span><strong>${currency(sideCents(current))}</strong>`;
 
   $("items").innerHTML = ELEMENTS.map(([key, name, unit]) => {
     const isAnchor = key === "anchors";
@@ -153,7 +154,7 @@ $("export").onclick = () => {
   const rows = [
     ["Strona", "Element", "Ilość", "Jednostka", "Cena jednostkowa (zł)", "Koszt (zł)"],
     ...state.sides.flatMap((side, index) => ELEMENTS.map(([key, name, unit]) =>
-      [index + 1, name, quantity(side, key), unit, decimal(state.prices[key]), decimal(itemCents(side, key) / 100)])),
+      [SIDE_NAMES[index], name, quantity(side, key), unit, decimal(state.prices[key]), decimal(itemCents(side, key) / 100)])),
     ...ELEMENTS.map(([key, name, unit]) =>
       ["SUMA", name, totalQuantity(key), unit, decimal(state.prices[key]),
         decimal(state.sides.reduce((sum, side) => sum + itemCents(side, key), 0) / 100)]),
@@ -184,7 +185,7 @@ $("importFile").onchange = async event => {
   }
 };
 $("reset").onclick = () => {
-  if (!confirm(`Wyzerować wszystkie liczniki strony ${state.selected + 1}? Ceny jednostkowe pozostaną bez zmian.`)) return;
+  if (!confirm(`Wyzerować wszystkie liczniki: ${SIDE_NAMES[state.selected]}? Ceny jednostkowe pozostaną bez zmian.`)) return;
   snapshot();
   state.sides[state.selected] = empty();
   save();
