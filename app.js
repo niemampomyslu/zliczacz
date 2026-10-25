@@ -38,6 +38,7 @@ try {
   state = initial();
 }
 const history = [];
+const priceEdits = new WeakSet(); // One undo step per continuous field edit.
 const $ = id => document.getElementById(id);
 const PLN = new Intl.NumberFormat("pl-PL", { style: "currency", currency: "PLN" });
 
@@ -49,6 +50,17 @@ const sideCents = side => ELEMENTS.reduce((sum, [key]) => sum + itemCents(side, 
 const allCents = () => state.sides.reduce((sum, side) => sum + sideCents(side), 0);
 const currency = cents => PLN.format(cents / 100);
 const priceText = value => value ? String(value).replace(".", ",") : "";
+
+// Input events fire for each keystroke (including on iOS); "change" waits for blur.
+// Accept a Polish decimal comma and incomplete but valid values like "19,".
+function parsePrice(text) {
+  const raw = text.trim().replace(/[\s\u00a0]/g, "").replace(",", ".");
+  if (raw === "") return 0;
+  if (!/^(?:\d+(?:\.\d{0,2})?|\.\d{1,2})$/.test(raw)) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 && value <= 1000000000
+    ? Math.round(value * 100) / 100 : null;
+}
 
 function save() {
   localStorage.setItem(KEY, JSON.stringify(state));
@@ -63,6 +75,19 @@ function snapshot() {
   history.push(JSON.stringify(state));
   if (history.length > 100) history.shift();
 }
+
+// Update totals without re-rendering inputs: the keyboard, focus and caret stay put.
+function updateCosts() {
+  const current = state.sides[state.selected];
+  $("sideCost").textContent = currency(sideCents(current));
+  for (const [key] of ELEMENTS) {
+    $("item-cost-" + key).textContent = currency(itemCents(current, key));
+    $("total-cost-" + key).textContent = currency(
+      state.sides.reduce((sum, side) => sum + itemCents(side, key), 0)
+    );
+  }
+  $("grandTotal").textContent = currency(allCents());
+}
 function render() {
   const current = state.sides[state.selected];
   $("tabs").innerHTML = state.sides.map((_, i) =>
@@ -70,7 +95,7 @@ function render() {
   ).join("");
 
   const count = ELEMENTS.reduce((sum, [key]) => sum + quantity(current, key), 0);
-  $("summary").innerHTML = `<span>${SIDE_NAMES[state.selected]} • ${count} elementów łącznie</span><strong>${currency(sideCents(current))}</strong>`;
+  $("summary").innerHTML = `<span>${SIDE_NAMES[state.selected]} • ${count} elementów łącznie</span><strong id="sideCost">${currency(sideCents(current))}</strong>`;
 
   $("items").innerHTML = ELEMENTS.map(([key, name, unit]) => {
     const isAnchor = key === "anchors";
@@ -81,12 +106,12 @@ function render() {
       <div class="item-top"><div><div class="name">${name}</div><div class="sub">${isAnchor ? "Automatycznie = liczba słupków" : unit}</div></div>${counter}</div>
       <div class="pricing"><div class="price-entry"><label class="price-label" for="price-${key}">Cena za ${unit}</label>
         <div class="price-field"><input id="price-${key}" data-price="${key}" type="text" inputmode="decimal" autocomplete="off" placeholder="0,00" value="${priceText(state.prices[key])}" aria-label="Cena jednostkowa: ${name}"><span>zł</span></div></div>
-        <div class="line-cost"><span>Koszt</span><strong>${currency(itemCents(current, key))}</strong></div>
+        <div class="line-cost"><span>Koszt</span><strong id="item-cost-${key}">${currency(itemCents(current, key))}</strong></div>
       </div></article>`;
   }).join("");
 
   $("totals").innerHTML = ELEMENTS.map(([key, name, unit]) =>
-    `<div class="totalrow"><span>${name}</span><div class="total-values"><strong>${totalQuantity(key)} ${unit}</strong><span>${currency(state.sides.reduce((sum, side) => sum + itemCents(side, key), 0))}</span></div></div>`
+    `<div class="totalrow"><span>${name}</span><div class="total-values"><strong>${totalQuantity(key)} ${unit}</strong><span id="total-cost-${key}">${currency(state.sides.reduce((sum, side) => sum + itemCents(side, key), 0))}</span></div></div>`
   ).join("");
   $("grandTotal").textContent = currency(allCents());
 }
@@ -111,26 +136,32 @@ $("items").addEventListener("click", event => {
   save();
   render();
 });
-$("items").addEventListener("change", event => {
+$("items").addEventListener("input", event => {
+  const input = event.target;
+  if (!input.matches("input[data-price]") || event.isComposing) return;
+  const key = input.dataset.price;
+  if (!ELEMENTS.some(([name]) => name === key)) return;
+  const price = parsePrice(input.value);
+  if (price === null) return; // Temporary invalid input is corrected on focusout.
+  if (state.prices[key] !== price) {
+    if (!priceEdits.has(input)) {
+      snapshot();
+      priceEdits.add(input);
+    }
+    state.prices[key] = price;
+    save(); // Synchronous localStorage write, no blur or confirmation required.
+    updateCosts(); // Do not replace the input while the user is typing.
+  }
+});
+$("items").addEventListener("focusout", event => {
   const input = event.target;
   if (!input.matches("input[data-price]")) return;
   const key = input.dataset.price;
   if (!ELEMENTS.some(([name]) => name === key)) return;
-  const raw = input.value.trim().replace(/\s/g, "").replace(",", ".");
-  const correctlyFormatted = raw === "" || /^\d+(?:\.\d{1,2})?$/.test(raw);
-  const number = raw === "" ? 0 : Number(raw);
-  if (!correctlyFormatted || !Number.isFinite(number) || number > 1000000000) {
-    input.value = priceText(state.prices[key]);
-    toast("Podaj poprawną cenę (maks. 2 miejsca po przecinku)");
-    return;
-  }
-  const price = Math.round(number * 100) / 100;
-  if (state.prices[key] !== price) {
-    snapshot();
-    state.prices[key] = price;
-    save();
-  }
-  render();
+  const wasValid = parsePrice(input.value) !== null;
+  input.value = priceText(state.prices[key]);
+  priceEdits.delete(input);
+  if (!wasValid) toast("Podaj poprawną cenę (maks. 2 miejsca po przecinku)");
 });
 $("undo").onclick = () => {
   if (!history.length) return toast("Brak zmian do cofnięcia");
